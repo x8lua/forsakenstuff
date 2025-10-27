@@ -718,13 +718,13 @@ end
 main()
 
 -- Mark script as fully loaded
-_G.1xwarnLOADED = true
+_G["1xwarnLOADED"] = true
 
 -- Monitor _G.1xwarnLOADED status every second
 task.spawn(function()
     while running do
         task.wait(1)
-        if _G.1xwarnLOADED == false then
+        if _G["1xwarnLOADED"] == false then
             if not paused then
                 paused = true
                 print("⏸️ Script PAUSED: _G.1xwarnLOADED is false")
