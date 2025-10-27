@@ -710,3 +710,6 @@ end
 -- Run the script
 main()
 
+-- Mark script as fully loaded
+_G.1xwarnLOADED = true
+
