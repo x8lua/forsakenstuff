@@ -718,21 +718,21 @@ end
 main()
 
 -- Mark script as fully loaded
-_G["1xwarnLOADED"] = true
+_G.masssword = true
 
--- Monitor _G.1xwarnLOADED status every second
+-- Monitor _G.masssword status every second
 task.spawn(function()
     while running do
         task.wait(1)
-        if _G["1xwarnLOADED"] == false then
+        if _G.masssword == false then
             if not paused then
                 paused = true
-                print("⏸️ Script PAUSED: _G.1xwarnLOADED is false")
+                print("⏸️ Script PAUSED: _G.masssword is false")
             end
         else
             if paused then
                 paused = false
-                print("▶️ Script RESUMED: _G.1xwarnLOADED is true")
+                print("▶️ Script RESUMED: _G.masssword is true")
             end
         end
     end
