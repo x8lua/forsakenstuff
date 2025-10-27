@@ -707,7 +707,7 @@ local function main()
     -- Listen for shutdown key
     table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if not gameProcessed and input.KeyCode == SHUTDOWN_KEY then
-            shutdown()
+            -- ww
         end
     end))
     
