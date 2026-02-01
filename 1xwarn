@@ -8,8 +8,25 @@ local Players = game:GetService("Players")
 local TARGET_KILLER_NAME = "1x1x1x1"
 
 -- Animation IDs to detect
-local MASS_INFECTION_ID = "131430497821198"
-local ENTANGLEMENT_ID = "119181003138006"
+local MASS_INFECTION_IDS = {
+    ["131430497821198"] = true,
+    ["99050723653468"] = true,
+    ["104897856211468"] = true,
+    ["109777684604906"] = true,
+    ["100592913030351"] = true,
+    ["101101433684051"] = true,
+    ["83685305553364"] = true,
+}
+
+local ENTANGLEMENT_IDS = {
+    ["119181003138006"] = true,
+    ["91237398850193"] = true,
+    ["105026134432828"] = true,
+    ["81935774508746"] = true,
+    ["116787687605496"] = true,
+    ["99030950661794"] = true,
+    ["99050723653468"] = true,
+}
 
 local SHUTDOWN_KEY = Enum.KeyCode.P
 local DEBUG = true -- Set to false to disable detailed debug output
@@ -20,6 +37,15 @@ local paused = false
 local connections = {}
 local LocalPlayer = Players.LocalPlayer
 local monitoredCharacters = setmetatable({}, { __mode = "k" })
+
+-- Helper: get table keys as a string
+local function getKeysString(tbl)
+    local keys = {}
+    for key, _ in pairs(tbl) do
+        table.insert(keys, tostring(key))
+    end
+    return table.concat(keys, ", ")
+end
 
 -- Main shutdown function
 local function shutdown()
@@ -88,11 +114,9 @@ local function createAnimationHandler(character)
         
         local playedId = normalizeAssetId(animationTrack.Animation.AnimationId)
         debugPrint("  Normalized ID:", playedId)
-        debugPrint("  Mass Infection ID:", MASS_INFECTION_ID)
-        debugPrint("  Entanglement ID:", ENTANGLEMENT_ID)
         
-        local isMassInfection = (playedId == MASS_INFECTION_ID)
-        local isEntanglement = (playedId == ENTANGLEMENT_ID)
+        local isMassInfection = MASS_INFECTION_IDS[playedId] or false
+        local isEntanglement = ENTANGLEMENT_IDS[playedId] or false
         
         if isMassInfection or isEntanglement then
             local animationName = isMassInfection and "MASS INFECTION" or "ENTANGLEMENT"
@@ -275,13 +299,31 @@ local function createAnimationHandler(character)
             local function isLocalPlayerInside(part)
                 if not LocalPlayer or not LocalPlayer.Character then return false end
                 if not part or not part.Parent then return false end
-                local touchingParts = workspace:GetPartsInPart(part)
+                
+                -- 创建更精确的检测点（往回偏移 0.5 stud）
+                local partSize = part.Size
+                local detectionPart = Instance.new("Part")
+                detectionPart.Size = Vector3.new(0.1, 0.1, 0.1) -- 小检测点
+                detectionPart.CanCollide = false
+                detectionPart.Transparency = 1
+                
+                -- 计算检测点位置：在方块中心往回 0.5 stud
+                local backDir = -part.CFrame.LookVector
+                local detectionPos = part.CFrame.Position + backDir * 0.5
+                detectionPart.CFrame = CFrame.new(detectionPos)
+                detectionPart.Parent = workspace
+                
+                local isInside = false
+                local touchingParts = workspace:GetPartsInPart(detectionPart)
                 for _, p in ipairs(touchingParts) do
                     if p:IsDescendantOf(LocalPlayer.Character) then
-                        return true
+                        isInside = true
+                        break
                     end
                 end
-                return false
+                
+                detectionPart:Destroy()
+                return isInside
             end
             
             -- Keybind to destroy warning GUI and sound (P key)
@@ -316,7 +358,8 @@ local function createAnimationHandler(character)
                         local objectName = ""
                         
                         if isMassInfection then
-                            staticObject = ingame:FindFirstChild("Shockwave")
+                            -- Check for both "Shockwave" and "shockwave"
+                            staticObject = ingame:FindFirstChild("Shockwave") or ingame:FindFirstChild("shockwave")
                             objectName = "SHOCKWAVE"
                         else -- Entanglement
                             staticObject = ingame:FindFirstChild("Swords")
@@ -403,6 +446,16 @@ local function createAnimationHandler(character)
                             else
                                 -- Entanglement (Swords): Create static block with EXACT CFrame matching Swords
                                 print("⚔️ SWORDS DETECTED! Creating static block matching Swords CFrame exactly...")
+                                
+                                -- Destroy red lookvector blocks when Swords appear
+                                if shortBlock and shortBlock.Parent then
+                                    shortBlock:Destroy()
+                                    print("✓ Destroyed SHORT lookvector block")
+                                end
+                                if longBlock and longBlock.Parent then
+                                    longBlock:Destroy()
+                                    print("✓ Destroyed LONG lookvector block")
+                                end
                                 
                                 staticBlock = Instance.new("Part")
                                 staticBlock.Name = objectName .. "TrackingBlock"
@@ -642,9 +695,9 @@ local function main()
     print("========================================")
     print("Animation Detection Script Starting")
     print("Target Killer:", TARGET_KILLER_NAME)
-    print("Detecting Animations:")
-    print("  - Mass Infection:", MASS_INFECTION_ID)
-    print("  - Entanglement:", ENTANGLEMENT_ID)
+    print("Press P to toggle script on/off")
+    print("Detecting Mass Infection Animations:", getKeysString(MASS_INFECTION_IDS))
+    print("Detecting Entanglement Animations:", getKeysString(ENTANGLEMENT_IDS))
     print("========================================")
     
     -- Preferred path: workspace.Players.Killers
@@ -704,14 +757,19 @@ local function main()
         return
     end
     
-    -- Listen for shutdown key
+    -- Listen for toggle key
     table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
         if not gameProcessed and input.KeyCode == SHUTDOWN_KEY then
-            -- ww
+            if running then
+                shutdown()
+                print("Script toggled OFF")
+            else
+                print("Script is already off. Re-execute to restart.")
+            end
         end
     end))
     
-    print("Animation detection script is running. Press P to shut down.")
+    print("Animation detection script is running. Press P to toggle off.")
 end
 
 -- Run the script
@@ -737,4 +795,3 @@ task.spawn(function()
         end
     end
 end)
-
