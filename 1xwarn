@@ -219,73 +219,172 @@ local function createAnimationHandler(character)
             local warnGui = nil
             local function createWarningGui()
                 if warnGui and warnGui.Parent then return end
-                
+
+                local TweenService = game:GetService("TweenService")
+
+                -- Create the main ScreenGui
                 local gui = Instance.new("ScreenGui")
                 gui.Name = animationName .. "Warn"
                 gui.IgnoreGuiInset = true
                 gui.ResetOnSpawn = false
                 gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+                gui.DisplayOrder = 999
                 gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-                
-                -- center label (the actual warning)
-                local warn = Instance.new("TextLabel")
-                warn.AnchorPoint = Vector2.new(0.5,0.5)
-                warn.Position = UDim2.fromScale(0.5,0.5)
-                warn.Size = UDim2.fromScale(0.7,0.15)
-                warn.BackgroundTransparency = 1
-                warn.Text = isMassInfection and "MASS INFECTION WARN" or "ENTANGLEMENT WARN"
-                warn.TextScaled = true
-                warn.Font = Enum.Font.GothamBlack
-                warn.TextColor3 = Color3.fromRGB(255,0,25)
-                warn.Parent = gui
-                
-                local stroke = Instance.new("UIStroke")
-                stroke.Thickness = 2
-                stroke.Color = Color3.new(0,0,0)
-                stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Contextual
-                stroke.Parent = warn
-                
-                -- subtle flash behind text (not screen-wide)
-                local flash = Instance.new("Frame")
-                flash.AnchorPoint = Vector2.new(0.5,0.5)
-                flash.Position = warn.Position
-                flash.Size = UDim2.fromScale(0.65,0.14)
-                flash.BackgroundColor3 = Color3.fromRGB(255,0,25)
-                flash.BackgroundTransparency = 0.8
-                flash.Parent = gui
-                
-                -- caution stripe thin bar above and below
-                local stripeTop = Instance.new("Frame")
-                stripeTop.Size = UDim2.new(1,0,0,6)
-                stripeTop.Position = UDim2.new(0,0,0.5,-50)
-                stripeTop.BackgroundColor3 = Color3.fromRGB(255,0,25)
-                stripeTop.BackgroundTransparency = 0.4
-                stripeTop.Parent = gui
-                
-                local stripeBottom = stripeTop:Clone()
-                stripeBottom.Position = UDim2.new(0,0,0.5,50)
-                stripeBottom.Parent = gui
-                
-                -- flash animation
+
+                -- Center container for the warning text (compact size for visibility)
+                local centerContainer = Instance.new("Frame")
+                centerContainer.Name = "CenterContainer"
+                centerContainer.AnchorPoint = Vector2.new(0.5, 0.5)
+                centerContainer.Position = UDim2.fromScale(0.5, 0.5)
+                centerContainer.Size = UDim2.fromScale(0.6, 0.15)
+                centerContainer.BackgroundTransparency = 1
+                centerContainer.Parent = gui
+
+                -- Glowing background effect
+                local glowFrame = Instance.new("Frame")
+                glowFrame.Name = "GlowFrame"
+                glowFrame.AnchorPoint = Vector2.new(0.5, 0.5)
+                glowFrame.Position = UDim2.fromScale(0.5, 0.5)
+                glowFrame.Size = UDim2.fromScale(1.1, 1.1)
+                glowFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 100)
+                glowFrame.BackgroundTransparency = 0.7
+                glowFrame.BorderSizePixel = 0
+                glowFrame.Parent = centerContainer
+
+                local glowCorner = Instance.new("UICorner")
+                glowCorner.CornerRadius = UDim.new(0, 20)
+                glowCorner.Parent = glowFrame
+
+                -- Glow pulsing animation
                 task.spawn(function()
-                    while gui.Parent do
-                        game:GetService("TweenService"):Create(flash, TweenInfo.new(0.45), {BackgroundTransparency = 0.4}):Play()
-                        task.wait(0.45)
-                        game:GetService("TweenService"):Create(flash, TweenInfo.new(0.45), {BackgroundTransparency = 0.85}):Play()
-                        task.wait(0.45)
+                    while glowFrame.Parent do
+                        TweenService:Create(glowFrame, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                            BackgroundTransparency = 0.4,
+                            Size = UDim2.fromScale(1.15, 1.15)
+                        }):Play()
+                        task.wait(0.8)
+                        TweenService:Create(glowFrame, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                            BackgroundTransparency = 0.8,
+                            Size = UDim2.fromScale(1.05, 1.05)
+                        }):Play()
+                        task.wait(0.8)
                     end
                 end)
-                
-                -- slight pulse
+
+                -- Main warning text
+                local warnText = Instance.new("TextLabel")
+                warnText.Name = "WarnText"
+                warnText.AnchorPoint = Vector2.new(0.5, 0.5)
+                warnText.Position = UDim2.fromScale(0.5, 0.5)
+                warnText.Size = UDim2.fromScale(0.95, 0.5)
+                warnText.BackgroundTransparency = 1
+                warnText.Text = isMassInfection and "MASS INFECTION WARN" or "ENTANGLEMENT WARN"
+                warnText.Font = Enum.Font.GothamBlack
+                warnText.TextScaled = true
+                warnText.TextColor3 = Color3.fromRGB(255, 255, 255)
+                warnText.TextStrokeTransparency = 0
+                warnText.TextStrokeColor3 = Color3.fromRGB(255, 0, 100)
+                warnText.Parent = centerContainer
+
+                -- Text gradient effect
+                local textGradient = Instance.new("UIGradient")
+                textGradient.Color = ColorSequence.new{
+                    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 100)),
+                    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
+                    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 255, 255))
+                }
+                textGradient.Parent = warnText
+
+                -- Animate text gradient
                 task.spawn(function()
-                    local t = 0
-                    while gui.Parent do
-                        t += RunService.Heartbeat:Wait()
-                        local s = 1 + math.sin(t*4)*0.08
-                        warn.Size = UDim2.fromScale(0.7*s,0.15*s)
+                    local offset = 0
+                    while warnText.Parent do
+                        offset = (offset + 0.015) % 1
+                        textGradient.Offset = Vector2.new(offset, 0)
+                        task.wait(0.03)
                     end
                 end)
-                
+
+                -- Glitch effect on text
+                task.spawn(function()
+                    local originalPos = warnText.Position
+                    while warnText.Parent do
+                        -- Random glitch
+                        if math.random() > 0.85 then
+                            local offsetX = (math.random() - 0.5) * 0.02
+                            local offsetY = (math.random() - 0.5) * 0.02
+                            warnText.Position = UDim2.new(
+                                originalPos.X.Scale + offsetX,
+                                originalPos.X.Offset,
+                                originalPos.Y.Scale + offsetY,
+                                originalPos.Y.Offset
+                            )
+                            task.wait(0.05)
+                            warnText.Position = originalPos
+                        end
+                        task.wait(0.1)
+                    end
+                end)
+
+                -- Glitch effect bars (top and bottom of warning box only)
+                local function createGlitchBar(yPos)
+                    local bar = Instance.new("Frame")
+                    bar.Size = UDim2.new(1, 0, 0, 3)
+                    bar.Position = UDim2.fromScale(0, yPos)
+                    bar.BackgroundColor3 = Color3.fromRGB(255, 0, 100)
+                    bar.BorderSizePixel = 0
+                    bar.Parent = centerContainer
+
+                    local barGradient = Instance.new("UIGradient")
+                    barGradient.Color = ColorSequence.new{
+                        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 100)),
+                        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 255, 255)),
+                        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 100))
+                    }
+                    barGradient.Parent = bar
+
+                    -- Animate gradient offset
+                    task.spawn(function()
+                        local offset = 0
+                        while bar.Parent do
+                            offset = (offset + 0.02) % 1
+                            barGradient.Offset = Vector2.new(offset, 0)
+                            task.wait(0.03)
+                        end
+                    end)
+
+                    return bar
+                end
+
+                local topBar = createGlitchBar(0)
+                local bottomBar = createGlitchBar(1)
+
+                -- Pulsing bars animation
+                task.spawn(function()
+                    while gui.Parent do
+                        TweenService:Create(topBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                            Size = UDim2.new(1, 0, 0, 6)
+                        }):Play()
+                        TweenService:Create(bottomBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                            Size = UDim2.new(1, 0, 0, 6)
+                        }):Play()
+                        task.wait(0.6)
+                        TweenService:Create(topBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                            Size = UDim2.new(1, 0, 0, 3)
+                        }):Play()
+                        TweenService:Create(bottomBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
+                            Size = UDim2.new(1, 0, 0, 3)
+                        }):Play()
+                        task.wait(0.6)
+                    end
+                end)
+
+                -- Entrance animation
+                centerContainer.Size = UDim2.fromScale(0, 0)
+                TweenService:Create(centerContainer, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                    Size = UDim2.fromScale(0.6, 0.15)
+                }):Play()
+
                 warnGui = gui
             end
             
@@ -325,20 +424,6 @@ local function createAnimationHandler(character)
                 detectionPart:Destroy()
                 return isInside
             end
-            
-            -- Keybind to destroy warning GUI and sound (P key)
-            local UserInputService = game:GetService("UserInputService")
-            UserInputService.InputBegan:Connect(function(input, gameProcessed)
-                if gameProcessed then return end
-                if input.KeyCode == Enum.KeyCode.P then
-                    destroyWarningGui()
-                    if sound and sound.Parent then
-                        sound:Stop()
-                        soundPlaying = false
-                    end
-                end
-            end)
-            
             -- Track static block state (Shockwave for Mass Infection, Swords for Entanglement)
             local staticBlockDetected = false
             local staticBlockDirection = nil
