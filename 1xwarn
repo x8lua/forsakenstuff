@@ -168,24 +168,17 @@ local function createAnimationHandler(character)
             local shortBlock = Instance.new("Part")
             shortBlock.Name = "KillerShortBlock"
             shortBlock.Size = shortSize
-            shortBlock.Anchored = false
+            shortBlock.Anchored = true
             shortBlock.CanCollide = false
-            shortBlock.CanTouch = false
-            shortBlock.CanQuery = false
-            shortBlock.Massless = true
             shortBlock.Material = Enum.Material.ForceField
             shortBlock.Color = Color3.fromRGB(255, 0, 0)
             shortBlock.Transparency = 0.5
-            shortBlock.CFrame = root.CFrame * CFrame.new(0, 0, -shortSize.Z / 2)
+            local shortPos = root.Position + flatLook * (shortBlock.Size.Z / 2)
+            shortBlock.CFrame = CFrame.new(shortPos, shortPos + flatLook)
             shortBlock.Parent = workspace
-
-            local shortWeld = Instance.new("WeldConstraint")
-            shortWeld.Part0 = shortBlock
-            shortWeld.Part1 = root
-            shortWeld.Parent = shortBlock
             
             print("✓ Created SHORT block (" .. shortSize.X .. "x" .. shortSize.Y .. "x" .. shortSize.Z .. ") - Duration: " .. duration .. "s")
-            debugPrint("  Short block position:", shortBlock.Position)
+            debugPrint("  Short block position:", shortPos)
             debugPrint("  Short block CFrame:", shortBlock.CFrame)
             debugPrint("  Short block parent:", shortBlock.Parent)
             
@@ -195,24 +188,17 @@ local function createAnimationHandler(character)
             local longBlock = Instance.new("Part")
             longBlock.Name = "KillerLongBlock"
             longBlock.Size = longSize
-            longBlock.Anchored = false
+            longBlock.Anchored = true
             longBlock.CanCollide = false
-            longBlock.CanTouch = false
-            longBlock.CanQuery = false
-            longBlock.Massless = true
             longBlock.Material = Enum.Material.ForceField
             longBlock.Color = Color3.fromRGB(255, 0, 0)
             longBlock.Transparency = 0.5
-            longBlock.CFrame = root.CFrame * CFrame.new(0, 0, -longSize.Z / 2)
+            local longPos = root.Position + flatLook * (longBlock.Size.Z / 2)
+            longBlock.CFrame = CFrame.new(longPos, longPos + flatLook)
             longBlock.Parent = workspace
-
-            local longWeld = Instance.new("WeldConstraint")
-            longWeld.Part0 = longBlock
-            longWeld.Part1 = root
-            longWeld.Parent = longBlock
             
             print("✓ Created LONG block (" .. longSize.X .. "x" .. longSize.Y .. "x" .. longSize.Z .. ") - Duration: " .. duration .. "s")
-            debugPrint("  Long block position:", longBlock.Position)
+            debugPrint("  Long block position:", longPos)
             debugPrint("  Long block CFrame:", longBlock.CFrame)
             debugPrint("  Long block parent:", longBlock.Parent)
             
@@ -669,18 +655,21 @@ local function createAnimationHandler(character)
                     return 
                 end
                 
-                -- 同步位置與旋轉：讓 Block 始終保持在 Killer 前方
-                if character and running then
+                -- Move and rotate blocks based on killer's look direction
+                if character then
                     local killerRoot = character:FindFirstChild("HumanoidRootPart")
                     if killerRoot then
-                        local kCFrame = killerRoot.CFrame
-                        -- CFrame.new(0, 0, -offset) 會自動根據 Killer 的朝向來計算「前方」
-                        if shortBlock and shortBlock.Parent then
-                            shortBlock.CFrame = kCFrame * CFrame.new(0, 0, -shortBlock.Size.Z / 2)
-                        end
-                        if longBlock and longBlock.Parent then
-                            longBlock.CFrame = kCFrame * CFrame.new(0, 0, -longBlock.Size.Z / 2)
-                        end
+                        local killerLook = killerRoot.CFrame.LookVector
+                        local directionToUse = Vector3.new(killerLook.X, 0, killerLook.Z).Unit
+                        
+                        -- Calculate new positions based on killer's current position
+                        local rootPos = killerRoot.Position
+                        local shortPos = rootPos + directionToUse * (shortBlock.Size.Z / 2)
+                        local longPos = rootPos + directionToUse * (longBlock.Size.Z / 2)
+                        
+                        -- Update CFrames to new positions and face the direction
+                        shortBlock.CFrame = CFrame.new(shortPos, shortPos + directionToUse)
+                        longBlock.CFrame = CFrame.new(longPos, longPos + directionToUse)
                     end
                 end
                 
