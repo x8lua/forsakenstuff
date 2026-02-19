@@ -170,6 +170,9 @@ local function createAnimationHandler(character)
             shortBlock.Size = shortSize
             shortBlock.Anchored = false
             shortBlock.CanCollide = false
+            shortBlock.CanTouch = false
+            shortBlock.CanQuery = false
+            shortBlock.Massless = true
             shortBlock.Material = Enum.Material.ForceField
             shortBlock.Color = Color3.fromRGB(255, 0, 0)
             shortBlock.Transparency = 0.5
@@ -194,6 +197,9 @@ local function createAnimationHandler(character)
             longBlock.Size = longSize
             longBlock.Anchored = false
             longBlock.CanCollide = false
+            longBlock.CanTouch = false
+            longBlock.CanQuery = false
+            longBlock.Massless = true
             longBlock.Material = Enum.Material.ForceField
             longBlock.Color = Color3.fromRGB(255, 0, 0)
             longBlock.Transparency = 0.5
