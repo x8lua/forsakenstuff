@@ -1,882 +1,591 @@
 -- Services
 local UserInputService = game:GetService("UserInputService")
-local RunService = game:GetService("RunService")
-local Debris = game:GetService("Debris")
-local Players = game:GetService("Players")
+local RunService        = game:GetService("RunService")
+local Debris            = game:GetService("Debris")
+local Players           = game:GetService("Players")
+local TweenService      = game:GetService("TweenService")
 
--- Configuration
-local TARGET_KILLER_NAME = "1x1x1x1"
+-- ─── Config ───────────────────────────────────────────────────────────────────
+local TARGET_KILLER_NAME  = "1x1x1x1"
+local SHUTDOWN_KEY        = Enum.KeyCode.P
+local ALERT_DISTANCE      = 10
+local MOVING_AWAY_TIMEOUT = 1.0  -- seconds block must be receding before going green
 
--- Animation IDs to detect
+local DECAL_LEFT  = "rbxassetid://124671919099973"
+local DECAL_RIGHT = "rbxassetid://97969792683032"
+local TWEEN_DUR   = 0.6
+local FADE_TIME   = 0.1
+local HOLD_TIME   = 0.4
+local ARROW_SIZE  = 320
+local UI_Y        = 0.62
+
 local MASS_INFECTION_IDS = {
-    ["131430497821198"] = true,
-    ["99050723653468"] = true,
-    ["104897856211468"] = true,
-    ["109777684604906"] = true,
-    ["100592913030351"] = true,
-    ["101101433684051"] = true,
-    ["83685305553364"] = true,
+    ["131430497821198"]=true, ["99050723653468"]=true, ["104897856211468"]=true,
+    ["109777684604906"]=true, ["100592913030351"]=true, ["101101433684051"]=true,
+    ["83685305553364"]=true,
 }
-
 local ENTANGLEMENT_IDS = {
-    ["119181003138006"] = true,
-    ["91237398850193"] = true,
-    ["105026134432828"] = true,
-    ["81935774508746"] = true,
-    ["116787687605496"] = true,
-    ["99030950661794"] = true,
-    ["99050723653468"] = true,
+    ["119181003138006"]=true, ["91237398850193"]=true, ["105026134432828"]=true,
+    ["81935774508746"]=true,  ["116787687605496"]=true, ["99030950661794"]=true,
+    ["99050723653468"]=true,
 }
 
-local SHUTDOWN_KEY = Enum.KeyCode.P
-local DEBUG = true -- Set to false to disable detailed debug output
-
--- State
-local running = true
-local paused = false
+-- ─── State ────────────────────────────────────────────────────────────────────
+local running   = true
+local paused    = false
 local connections = {}
 local LocalPlayer = Players.LocalPlayer
 local monitoredCharacters = setmetatable({}, { __mode = "k" })
 
--- Helper: get table keys as a string
-local function getKeysString(tbl)
-    local keys = {}
-    for key, _ in pairs(tbl) do
-        table.insert(keys, tostring(key))
-    end
-    return table.concat(keys, ", ")
-end
-
--- Main shutdown function
-local function shutdown()
-    if not running then return end
-    running = false
-    
-    print("Animation detection script shutting down.")
-    
-    for _, connection in ipairs(connections) do
-        connection:Disconnect()
-    end
-    connections = {} -- Clear connections table
-end
-
--- Debug print helper
-local function debugPrint(...)
-    if DEBUG then
-        print("[DEBUG]", ...)
-    end
-end
-
--- Normalize asset id string to its numeric id
+-- ─── Helpers ──────────────────────────────────────────────────────────────────
 local function normalizeAssetId(idStr)
     if type(idStr) ~= "string" then return nil end
     return string.match(idStr, "%d+")
 end
-
--- Helper: find character root part
-local function findRootPart(character)
-    if not character then return nil end
-    
-    -- Try common root part names
-    local root = character:FindFirstChild("HumanoidRootPart") 
-                or character:FindFirstChild("Torso") 
-                or character:FindFirstChild("UpperTorso")
-                or character:FindFirstChild("Head")
-    
-    if root then
-        debugPrint("  Found root part:", root.Name)
-        return root
+local function findRootPart(char)
+    if not char then return nil end
+    return char:FindFirstChild("HumanoidRootPart")
+        or char:FindFirstChild("Torso")
+        or char:FindFirstChild("UpperTorso")
+        or char:FindFirstChild("Head")
+end
+local function findRotationPart(char)
+    if not char then return nil end
+    for _, n in ipairs({"HumanoidRootPart","UpperTorso","Torso","Head"}) do
+        local p = char:FindFirstChild(n)
+        if p and p:IsA("BasePart") then return p end
     end
-    
-    -- If no standard root found, look for any BasePart that could serve as anchor
-    for _, child in ipairs(character:GetChildren()) do
-        if child:IsA("BasePart") then
-            debugPrint("  Using fallback root part:", child.Name)
-            return child
-        end
-    end
-    
-    return nil
+    return findRootPart(char)
+end
+local function buildHorizontalCFrame(pos, look)
+    local flat = Vector3.new(look.X, 0, look.Z)
+    if flat.Magnitude <= 0.001 then flat = Vector3.new(0,0,-1)
+    else flat = flat.Unit end
+    return CFrame.lookAt(pos, pos + flat, Vector3.new(0,1,0))
+end
+local function distanceToSurface(part, point)
+    if not part or not part.Parent then return math.huge end
+    local lp   = part.CFrame:PointToObjectSpace(point)
+    local half = part.Size / 2
+    local inside = math.abs(lp.X)<=half.X and math.abs(lp.Y)<=half.Y and math.abs(lp.Z)<=half.Z
+    if inside then return 0 end
+    local clamped = Vector3.new(
+        math.clamp(lp.X,-half.X,half.X),
+        math.clamp(lp.Y,-half.Y,half.Y),
+        math.clamp(lp.Z,-half.Z,half.Z))
+    return (lp-clamped).Magnitude
+end
+local function getEscapeDirection(hrp, block)
+    if not block or not block.Parent then return "LEFT" end
+    local camRight = workspace.CurrentCamera.CFrame.RightVector
+    local localPos = block.CFrame:PointToObjectSpace(hrp.Position)
+    local escapeDir = localPos.X <= 0 and -block.CFrame.RightVector or block.CFrame.RightVector
+    return escapeDir:Dot(camRight) > 0 and "RIGHT" or "LEFT"
+end
+local function localPlayerIsKiller()
+    local char = LocalPlayer.Character
+    if not char then return false end
+    if char.Name == TARGET_KILLER_NAME then return true end
+    local kf = workspace:FindFirstChild("Players")
+    if kf then kf = kf:FindFirstChild("Killers") end
+    if kf and kf:FindFirstChild(LocalPlayer.Name) then return true end
+    return false
+end
+local function setBlockColor(block, color)
+    if block and block.Parent then block.Color = color end
 end
 
--- Function factory: creates an animation handler for a specific character
-local function createAnimationHandler(character)
-    return function(animationTrack)
-        -- Check if script is paused
-        if paused then
-            debugPrint("Script is paused, ignoring animation")
+-- ─── Shutdown ─────────────────────────────────────────────────────────────────
+local function shutdown()
+    if not running then return end
+    running = false
+    print("[Detector] Shutting down.")
+    for _, c in ipairs(connections) do c:Disconnect() end
+    connections = {}
+end
+
+-- ─── Alert UI ─────────────────────────────────────────────────────────────────
+local function buildAlertUI()
+    local cam    = workspace.CurrentCamera
+    local vp     = cam.ViewportSize
+    local SW, SH = vp.X, vp.Y
+    local CX     = SW / 2
+    local textPxY  = SH * UI_Y
+    local arrowPxY = textPxY - (ARROW_SIZE / 2) - 10
+
+    local drawText = Drawing.new("Text")
+    drawText.Size = 90; drawText.Font = Drawing.Fonts.UI
+    drawText.Center = true; drawText.Outline = true
+    drawText.OutlineColor = Color3.fromRGB(80,0,0)
+    drawText.Color = Color3.fromRGB(220,30,30)
+    drawText.Position = Vector2.new(CX, textPxY)
+    drawText.Transparency = 1; drawText.Visible = true; drawText.Text = ""
+
+    local drawShadow = Drawing.new("Text")
+    drawShadow.Size = 90; drawShadow.Font = Drawing.Fonts.UI
+    drawShadow.Center = true; drawShadow.Outline = false
+    drawShadow.Color = Color3.fromRGB(10,0,0)
+    drawShadow.Position = Vector2.new(CX+3, textPxY+4)
+    drawShadow.Transparency = 1; drawShadow.Visible = true; drawShadow.Text = ""
+
+    local gui = Instance.new("ScreenGui")
+    gui.Name = "GoDirectionUI"; gui.ResetOnSpawn = false
+    gui.IgnoreGuiInset = true
+    gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+    local img = Instance.new("ImageLabel")
+    img.BackgroundTransparency = 1
+    img.AnchorPoint = Vector2.new(0.5,0.5)
+    img.Position = UDim2.new(0,CX,0,arrowPxY)
+    img.Size = UDim2.fromOffset(ARROW_SIZE,ARROW_SIZE)
+    img.ImageTransparency = 1
+    img.ImageColor3 = Color3.fromRGB(200,40,40)
+    img.ScaleType = Enum.ScaleType.Fit
+    img.ZIndex = 2; img.Parent = gui
+
+    local bar = Instance.new("Frame")
+    bar.BackgroundColor3 = Color3.fromRGB(5,0,0)
+    bar.BackgroundTransparency = 1; bar.BorderSizePixel = 0
+    bar.AnchorPoint = Vector2.new(0.5,0.5)
+    bar.Position = UDim2.new(0.5,0,UI_Y,0)
+    bar.Size = UDim2.new(1,0,0,ARROW_SIZE+80)
+    bar.ZIndex = 1; bar.Visible = false; bar.Parent = gui
+
+    local uiGrad = Instance.new("UIGradient")
+    uiGrad.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   Color3.fromRGB(0,0,0)),
+        ColorSequenceKeypoint.new(0.2, Color3.fromRGB(8,0,0)),
+        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(15,0,0)),
+        ColorSequenceKeypoint.new(0.8, Color3.fromRGB(8,0,0)),
+        ColorSequenceKeypoint.new(1,   Color3.fromRGB(0,0,0)),
+    })
+    uiGrad.Transparency = NumberSequence.new({
+        NumberSequenceKeypoint.new(0,    1),
+        NumberSequenceKeypoint.new(0.15, 0.3),
+        NumberSequenceKeypoint.new(0.5,  0),
+        NumberSequenceKeypoint.new(0.85, 0.3),
+        NumberSequenceKeypoint.new(1,    1),
+    })
+    uiGrad.Parent = bar
+
+    local alertSound = Instance.new("Sound")
+    alertSound.Name = "DamageAlert"
+    alertSound.SoundId = getcustomasset("forvids/sfx/tetrio/damage_alert.ogg")
+    alertSound.Volume = 5; alertSound.Looped = false; alertSound.Parent = workspace
+
+    -- internal
+    local slideInfo   = TweenInfo.new(TWEEN_DUR, Enum.EasingStyle.Quad, Enum.EasingDirection.InOut)
+    local fadeInInfo  = TweenInfo.new(FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local fadeOutInfo = TweenInfo.new(FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+    local barFadeIn   = TweenInfo.new(FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+    local barFadeOut  = TweenInfo.new(FADE_TIME, Enum.EasingStyle.Quad, Enum.EasingDirection.In)
+
+    local currentDir  = "LEFT"
+    local loopRunning = false
+    local loopThread  = nil
+    local soundPlaying = false
+    local lastSoundT   = 0
+
+    local activeFade = nil
+    local function fadeText(fromT, toT, dur)
+        if activeFade then task.cancel(activeFade) end
+        activeFade = task.spawn(function()
+            local elapsed, step = 0, 1/60
+            while elapsed < dur do
+                elapsed += step
+                local v = fromT + (toT-fromT)*math.clamp(elapsed/dur,0,1)
+                drawText.Transparency   = v
+                drawShadow.Transparency = v
+                task.wait(step)
+            end
+            drawText.Transparency   = toT
+            drawShadow.Transparency = toT
+        end)
+    end
+
+    local function glitch()
+        task.spawn(function()
+            for _ = 1,3 do
+                local ox,oy = math.random(-6,6), math.random(-3,3)
+                drawText.Position   = Vector2.new(CX+ox, textPxY+oy)
+                drawShadow.Position = Vector2.new(CX+ox+3, textPxY+oy+4)
+                task.wait(0.04)
+            end
+            drawText.Position   = Vector2.new(CX, textPxY)
+            drawShadow.Position = Vector2.new(CX+3, textPxY+4)
+        end)
+    end
+
+    local function clearVisuals()
+        drawText.Text = ""; drawShadow.Text = ""
+        drawText.Transparency = 1; drawShadow.Transparency = 1
+        bar.Visible = false; img.ImageTransparency = 1
+    end
+
+    -- single cycle — interruptible by direction change
+    local function runOneCycle(dir)
+        local goLeft    = (dir == "LEFT")
+        local edgePx    = goLeft and (SW*0.05) or (SW*0.95)
+        local centerPos = UDim2.new(0,CX,0,arrowPxY)
+        local destPos   = UDim2.new(0,edgePx,0,arrowPxY)
+
+        local label = goLeft and "GO LEFT" or "GO RIGHT"
+        drawText.Text = label; drawShadow.Text = label
+        img.Image = goLeft and DECAL_LEFT or DECAL_RIGHT
+
+        -- reset to center (timeline = 0)
+        img.Position = centerPos; img.ImageTransparency = 1
+        bar.BackgroundTransparency = 1; bar.Visible = true
+        drawText.Transparency = 0; drawShadow.Transparency = 0
+
+        -- kick off slide + fade in
+        fadeText(0,1,FADE_TIME)
+        TweenService:Create(bar,  barFadeIn,  {BackgroundTransparency=0.3}):Play()
+        TweenService:Create(img,  slideInfo,  {Position=destPos}):Play()
+        TweenService:Create(img,  fadeInInfo, {ImageTransparency=0}):Play()
+        glitch()
+
+        -- wait TWEEN_DUR but break early if direction changed
+        local elapsed = 0
+        local totalWait = TWEEN_DUR + HOLD_TIME
+        while elapsed < totalWait do
+            task.wait(0.05)
+            elapsed += 0.05
+            -- ── INTERRUPT: direction changed or loop stopped ──
+            if not loopRunning or currentDir ~= dir then
+                break
+            end
+        end
+
+        -- fade out + reset (timeline back to 0)
+        fadeText(1,0,FADE_TIME)
+        TweenService:Create(bar, barFadeOut,  {BackgroundTransparency=1}):Play()
+        TweenService:Create(img, fadeOutInfo, {ImageTransparency=1}):Play()
+        task.wait(FADE_TIME)
+
+        bar.Visible = false
+        img.Position = centerPos  -- back to center = timeline 0
+    end
+
+    local ui = {}
+
+    function ui.show(dir)
+        -- if direction changed mid-cycle, update and the running cycle will interrupt itself
+        local dirChanged = currentDir ~= dir
+        currentDir = dir
+
+        local now = os.clock()
+        if not soundPlaying or now - lastSoundT >= 1.5 then
+            alertSound:Stop(); alertSound:Play()
+            soundPlaying = true; lastSoundT = now
+        end
+
+        if loopRunning then
+            -- direction change already handled by runOneCycle polling currentDir
             return
         end
-        
-        debugPrint("Animation played detected")
-        debugPrint("  Animation object:", animationTrack.Animation)
-        debugPrint("  Animation ID:", animationTrack.Animation.AnimationId)
-        
-        local playedId = normalizeAssetId(animationTrack.Animation.AnimationId)
-        debugPrint("  Normalized ID:", playedId)
-        
+
+        loopRunning = true
+        loopThread = task.spawn(function()
+            while loopRunning do
+                runOneCycle(currentDir)
+                if not loopRunning then break end
+                task.wait(0.03)
+            end
+            clearVisuals()
+        end)
+    end
+
+    function ui.hide()
+        if not loopRunning then return end
+        loopRunning = false
+        alertSound:Stop(); soundPlaying = false
+        if loopThread then task.cancel(loopThread); loopThread = nil end
+        clearVisuals()
+    end
+
+    function ui.destroy()
+        ui.hide()
+        drawText:Remove(); drawShadow:Remove()
+        gui:Destroy()
+        if alertSound and alertSound.Parent then alertSound:Destroy() end
+    end
+
+    function ui.updateDir(dir)
+        currentDir = dir
+    end
+
+    return ui
+end
+
+-- ─── Animation Handler ────────────────────────────────────────────────────────
+local function createAnimationHandler(character)
+    return function(animTrack)
+        if paused then return end
+        local playedId        = normalizeAssetId(animTrack.Animation.AnimationId)
         local isMassInfection = MASS_INFECTION_IDS[playedId] or false
-        local isEntanglement = ENTANGLEMENT_IDS[playedId] or false
-        
-        if isMassInfection or isEntanglement then
-            local animationName = isMassInfection and "MASS INFECTION" or "ENTANGLEMENT"
-            print("✓ TARGET ANIMATION DETECTED:", animationName)
-            print("  Character:", character.Name)
-            print("  Character path:", character:GetFullName())
-            
-            local root = findRootPart(character)
-            debugPrint("  Root part search result:", root)
-            
-            if not root then 
-                warn("✗ Cannot create blocks: No root part found!")
-                debugPrint("  Character children:")
-                for _, child in ipairs(character:GetChildren()) do
-                    debugPrint("    -", child.Name, "(" .. child.ClassName .. ")")
-                end
-                return 
+        local isEntanglement  = ENTANGLEMENT_IDS[playedId]   or false
+        if not isMassInfection and not isEntanglement then return end
+
+        local animationName = isMassInfection and "MASS INFECTION" or "ENTANGLEMENT"
+        print("✓ DETECTED:", animationName)
+
+        local cachedRoot     = findRootPart(character)
+        local cachedRotation = findRotationPart(character)
+        if not cachedRoot then warn("✗ No root part!"); return end
+
+        local shortSize, longSize, duration
+        if isMassInfection then
+            shortSize=Vector3.new(10,5,11); longSize=Vector3.new(10,5,600); duration=10
+        else
+            shortSize=Vector3.new(6,1.8,5); longSize=Vector3.new(6,1.8,600); duration=4
+        end
+
+        local initialCF = buildHorizontalCFrame(
+            cachedRoot.Position,
+            (cachedRotation and cachedRotation.CFrame.LookVector or Vector3.new(0,0,-1))
+        )
+        local function makeBlock(name, size)
+            local b = Instance.new("Part")
+            b.Name=name; b.Size=size; b.Anchored=true
+            b.CanCollide=false; b.CanTouch=false; b.CanQuery=false; b.Massless=true
+            b.Material=Enum.Material.ForceField
+            b.Color=Color3.fromRGB(255,0,0); b.Transparency=0.5
+            b.CFrame=initialCF*CFrame.new(0,0,-size.Z/2)
+            b.Parent=workspace; Debris:AddItem(b,duration)
+            return b
+        end
+
+        local shortBlock = makeBlock("KillerShortBlock", shortSize)
+        local longBlock  = makeBlock("KillerLongBlock",  longSize)
+        print("✓ RED blocks | duration:", duration.."s")
+
+        local hyperSound = Instance.new("Sound")
+        hyperSound.SoundId = getcustomasset("forvids/sfx/tetrio/hyperalert.ogg")
+        hyperSound.Volume = 6; hyperSound.Looped = false; hyperSound.Parent = workspace
+        hyperSound:Play(); Debris:AddItem(hyperSound, 5)
+
+        local alertUI = buildAlertUI()
+
+        local staticBlock=nil; local staticDetected=false
+        local staticDetectedAt=0; local STATIC_DURATION=5.5
+
+        -- ── moving-away tracking per block ──
+        -- key = block reference, value = { lastDist, recedingStartTime, isGreen }
+        local blockState = {}
+        local function getBlockState(b)
+            if not blockState[b] then
+                blockState[b] = { lastDist = math.huge, recedingStart = nil, recedingSnapDist = nil, isGreen = false }
             end
-            
-            -- Compute forward (flattened on XZ plane)
-            local look = root.CFrame.LookVector
-            debugPrint("  Root position:", root.Position)
-            debugPrint("  Root LookVector:", look)
-            
-            local flatLook = Vector3.new(look.X, 0, look.Z)
-            debugPrint("  Flattened LookVector:", flatLook)
-            debugPrint("  Flattened magnitude:", flatLook.Magnitude)
-            
-            if flatLook.Magnitude > 0 then
-                flatLook = flatLook.Unit
-            else
-                flatLook = look
-            end
-            debugPrint("  Final forward direction:", flatLook)
-            
-            -- Determine block sizes and duration based on animation type
-            local shortSize, longSize, duration
+            return blockState[b]
+        end
+
+        local function checkStaticSpawn()
+            if staticDetected then return end
+            local map=workspace:FindFirstChild("Map"); if not map then return end
+            local ingame=map:FindFirstChild("Ingame"); if not ingame then return end
+            local obj, objName
             if isMassInfection then
-                shortSize = Vector3.new(10, 5, 11)
-                longSize = Vector3.new(10, 5, 600)
-                duration = 10
-            else -- Entanglement
-                shortSize = Vector3.new(6, 1.8, 5)
-                longSize = Vector3.new(6, 1.8, 600)
-                duration = 4
-            end
-            
-            -- Create a short block in front of killer
-            local shortBlock = Instance.new("Part")
-            shortBlock.Name = "KillerShortBlock"
-            shortBlock.Size = shortSize
-            shortBlock.Anchored = true
-            shortBlock.CanCollide = false
-            shortBlock.Material = Enum.Material.ForceField
-            shortBlock.Color = Color3.fromRGB(255, 0, 0)
-            shortBlock.Transparency = 0.5
-            local shortPos = root.Position + flatLook * (shortBlock.Size.Z / 2)
-            shortBlock.CFrame = CFrame.new(shortPos, shortPos + flatLook)
-            shortBlock.Parent = workspace
-            
-            print("✓ Created SHORT block (" .. shortSize.X .. "x" .. shortSize.Y .. "x" .. shortSize.Z .. ") - Duration: " .. duration .. "s")
-            debugPrint("  Short block position:", shortPos)
-            debugPrint("  Short block CFrame:", shortBlock.CFrame)
-            debugPrint("  Short block parent:", shortBlock.Parent)
-            
-            Debris:AddItem(shortBlock, duration)
-            
-            -- Create a long block facing killer forward
-            local longBlock = Instance.new("Part")
-            longBlock.Name = "KillerLongBlock"
-            longBlock.Size = longSize
-            longBlock.Anchored = true
-            longBlock.CanCollide = false
-            longBlock.Material = Enum.Material.ForceField
-            longBlock.Color = Color3.fromRGB(255, 0, 0)
-            longBlock.Transparency = 0.5
-            local longPos = root.Position + flatLook * (longBlock.Size.Z / 2)
-            longBlock.CFrame = CFrame.new(longPos, longPos + flatLook)
-            longBlock.Parent = workspace
-            
-            print("✓ Created LONG block (" .. longSize.X .. "x" .. longSize.Y .. "x" .. longSize.Z .. ") - Duration: " .. duration .. "s")
-            debugPrint("  Long block position:", longPos)
-            debugPrint("  Long block CFrame:", longBlock.CFrame)
-            debugPrint("  Long block parent:", longBlock.Parent)
-            
-            Debris:AddItem(longBlock, duration)
-            
-            -- Sound that plays while local player is inside either block
-            local sound = Instance.new("Sound")
-            sound.Name = "AlertSound"
-            sound.SoundId = getcustomasset("forvids/sfx/tetrio/hyperalert.ogg")
-            sound.Volume = 6
-            sound.Looped = false
-            sound.Parent = longBlock
-            
-            local soundPlaying = false
-            local lastPlayed = 0
-            
-            -- Warning GUI that shows when local player is inside either block
-            local warnGui = nil
-            local function createWarningGui()
-                if warnGui and warnGui.Parent then return end
-
-                local TweenService = game:GetService("TweenService")
-
-                -- Create the main ScreenGui
-                local gui = Instance.new("ScreenGui")
-                gui.Name = animationName .. "Warn"
-                gui.IgnoreGuiInset = true
-                gui.ResetOnSpawn = false
-                gui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-                gui.DisplayOrder = 999
-                gui.Parent = LocalPlayer:WaitForChild("PlayerGui")
-
-                -- Center container for the warning text (compact size for visibility)
-                local centerContainer = Instance.new("Frame")
-                centerContainer.Name = "CenterContainer"
-                centerContainer.AnchorPoint = Vector2.new(0.5, 0.5)
-                centerContainer.Position = UDim2.fromScale(0.5, 0.5)
-                centerContainer.Size = UDim2.fromScale(0.6, 0.15)
-                centerContainer.BackgroundTransparency = 1
-                centerContainer.Parent = gui
-
-                -- Glowing background effect
-                local glowFrame = Instance.new("Frame")
-                glowFrame.Name = "GlowFrame"
-                glowFrame.AnchorPoint = Vector2.new(0.5, 0.5)
-                glowFrame.Position = UDim2.fromScale(0.5, 0.5)
-                glowFrame.Size = UDim2.fromScale(1.1, 1.1)
-                glowFrame.BackgroundColor3 = Color3.fromRGB(255, 0, 100)
-                glowFrame.BackgroundTransparency = 0.7
-                glowFrame.BorderSizePixel = 0
-                glowFrame.Parent = centerContainer
-
-                local glowCorner = Instance.new("UICorner")
-                glowCorner.CornerRadius = UDim.new(0, 20)
-                glowCorner.Parent = glowFrame
-
-                -- Glow pulsing animation
-                task.spawn(function()
-                    while glowFrame.Parent do
-                        TweenService:Create(glowFrame, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                            BackgroundTransparency = 0.4,
-                            Size = UDim2.fromScale(1.15, 1.15)
-                        }):Play()
-                        task.wait(0.8)
-                        TweenService:Create(glowFrame, TweenInfo.new(0.8, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                            BackgroundTransparency = 0.8,
-                            Size = UDim2.fromScale(1.05, 1.05)
-                        }):Play()
-                        task.wait(0.8)
-                    end
-                end)
-
-                -- Main warning text
-                local warnText = Instance.new("TextLabel")
-                warnText.Name = "WarnText"
-                warnText.AnchorPoint = Vector2.new(0.5, 0.5)
-                warnText.Position = UDim2.fromScale(0.5, 0.5)
-                warnText.Size = UDim2.fromScale(0.95, 0.5)
-                warnText.BackgroundTransparency = 1
-                warnText.Text = isMassInfection and "MASS INFECTION WARN" or "ENTANGLEMENT WARN"
-                warnText.Font = Enum.Font.GothamBlack
-                warnText.TextScaled = true
-                warnText.TextColor3 = Color3.fromRGB(255, 255, 255)
-                warnText.TextStrokeTransparency = 0
-                warnText.TextStrokeColor3 = Color3.fromRGB(255, 0, 100)
-                warnText.Parent = centerContainer
-
-                -- Text gradient effect
-                local textGradient = Instance.new("UIGradient")
-                textGradient.Color = ColorSequence.new{
-                    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 100)),
-                    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 255, 255)),
-                    ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 255, 255))
-                }
-                textGradient.Parent = warnText
-
-                -- Animate text gradient
-                task.spawn(function()
-                    local offset = 0
-                    while warnText.Parent do
-                        offset = (offset + 0.015) % 1
-                        textGradient.Offset = Vector2.new(offset, 0)
-                        task.wait(0.03)
-                    end
-                end)
-
-                -- Glitch effect on text
-                task.spawn(function()
-                    local originalPos = warnText.Position
-                    while warnText.Parent do
-                        -- Random glitch
-                        if math.random() > 0.85 then
-                            local offsetX = (math.random() - 0.5) * 0.02
-                            local offsetY = (math.random() - 0.5) * 0.02
-                            warnText.Position = UDim2.new(
-                                originalPos.X.Scale + offsetX,
-                                originalPos.X.Offset,
-                                originalPos.Y.Scale + offsetY,
-                                originalPos.Y.Offset
-                            )
-                            task.wait(0.05)
-                            warnText.Position = originalPos
-                        end
-                        task.wait(0.1)
-                    end
-                end)
-
-                -- Glitch effect bars (top and bottom of warning box only)
-                local function createGlitchBar(yPos)
-                    local bar = Instance.new("Frame")
-                    bar.Size = UDim2.new(1, 0, 0, 3)
-                    bar.Position = UDim2.fromScale(0, yPos)
-                    bar.BackgroundColor3 = Color3.fromRGB(255, 0, 100)
-                    bar.BorderSizePixel = 0
-                    bar.Parent = centerContainer
-
-                    local barGradient = Instance.new("UIGradient")
-                    barGradient.Color = ColorSequence.new{
-                        ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 100)),
-                        ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 255, 255)),
-                        ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 100))
-                    }
-                    barGradient.Parent = bar
-
-                    -- Animate gradient offset
-                    task.spawn(function()
-                        local offset = 0
-                        while bar.Parent do
-                            offset = (offset + 0.02) % 1
-                            barGradient.Offset = Vector2.new(offset, 0)
-                            task.wait(0.03)
-                        end
-                    end)
-
-                    return bar
+                obj=ingame:FindFirstChild("Shockwave") or ingame:FindFirstChild("shockwave")
+                objName="SHOCKWAVE"
+            else obj=ingame:FindFirstChild("Swords"); objName="SWORDS" end
+            if not obj then return end
+            staticDetected=true; staticDetectedAt=os.clock()
+            print("🔍", objName, "FOUND")
+            local objPart
+            if obj:IsA("Model") then
+                objPart=(not isMassInfection and obj:FindFirstChild("Core"))
+                    or obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            elseif obj:IsA("BasePart") then objPart=obj end
+            if not objPart then warn("⚠️ No part in",objName); staticDetected=false; return end
+            if isMassInfection then
+                local vel=objPart.AssemblyLinearVelocity
+                local dir=(vel.Magnitude>0.1)
+                    and Vector3.new(vel.X,0,vel.Z).Unit
+                    or  Vector3.new(objPart.CFrame.LookVector.X,0,objPart.CFrame.LookVector.Z).Unit
+                local root=findRootPart(character)
+                if root then
+                    staticBlock=Instance.new("Part")
+                    staticBlock.Name="ShockwaveTrackBlock"; staticBlock.Size=longSize
+                    staticBlock.Anchored=true; staticBlock.CanCollide=false
+                    staticBlock.Material=Enum.Material.ForceField
+                    staticBlock.Color=Color3.fromRGB(0,255,255); staticBlock.Transparency=0.5
+                    local pos=root.Position+dir*(longSize.Z/2)
+                    staticBlock.CFrame=CFrame.new(pos,pos+dir)
+                    staticBlock.Parent=workspace; Debris:AddItem(staticBlock,10)
+                    print("✓ SHOCKWAVE cyan block")
                 end
-
-                local topBar = createGlitchBar(0)
-                local bottomBar = createGlitchBar(1)
-
-                -- Pulsing bars animation
-                task.spawn(function()
-                    while gui.Parent do
-                        TweenService:Create(topBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                            Size = UDim2.new(1, 0, 0, 6)
-                        }):Play()
-                        TweenService:Create(bottomBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                            Size = UDim2.new(1, 0, 0, 6)
-                        }):Play()
-                        task.wait(0.6)
-                        TweenService:Create(topBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                            Size = UDim2.new(1, 0, 0, 3)
-                        }):Play()
-                        TweenService:Create(bottomBar, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut), {
-                            Size = UDim2.new(1, 0, 0, 3)
-                        }):Play()
-                        task.wait(0.6)
-                    end
-                end)
-
-                -- Entrance animation
-                centerContainer.Size = UDim2.fromScale(0, 0)
-                TweenService:Create(centerContainer, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
-                    Size = UDim2.fromScale(0.6, 0.15)
-                }):Play()
-
-                warnGui = gui
+            else
+                if shortBlock and shortBlock.Parent then shortBlock:Destroy() end
+                if longBlock  and longBlock.Parent  then longBlock:Destroy()  end
+                staticBlock=Instance.new("Part")
+                staticBlock.Name="SwordsTrackBlock"; staticBlock.Size=longSize
+                staticBlock.Anchored=true; staticBlock.CanCollide=false
+                staticBlock.Material=Enum.Material.ForceField
+                staticBlock.Color=Color3.fromRGB(0,255,255); staticBlock.Transparency=0.5
+                staticBlock.CFrame=objPart.CFrame
+                staticBlock.Parent=workspace; Debris:AddItem(staticBlock,10)
+                print("✓ SWORDS cyan block")
             end
-            
-            local function destroyWarningGui()
-                if warnGui and warnGui.Parent then
-                    warnGui:Destroy()
-                    warnGui = nil
+        end
+
+        local heartbeat
+        heartbeat = RunService.Heartbeat:Connect(function()
+            if not character or not character.Parent then
+                heartbeat:Disconnect(); alertUI.destroy(); return
+            end
+            if localPlayerIsKiller() then alertUI.hide(); return end
+
+            local localChar = LocalPlayer.Character
+            local hrp = localChar and localChar:FindFirstChild("HumanoidRootPart")
+            if not hrp then alertUI.hide(); return end
+
+            if not cachedRoot or not cachedRoot.Parent then
+                cachedRoot=findRootPart(character)
+                cachedRotation=findRotationPart(character)
+            end
+
+            if cachedRoot and cachedRotation then
+                local look=cachedRotation.CFrame.LookVector
+                local cf=buildHorizontalCFrame(cachedRoot.Position, look)
+                if shortBlock and shortBlock.Parent then
+                    shortBlock.CFrame=cf*CFrame.new(0,0,-shortBlock.Size.Z/2) end
+                if longBlock and longBlock.Parent then
+                    longBlock.CFrame=cf*CFrame.new(0,0,-longBlock.Size.Z/2) end
+            end
+
+            checkStaticSpawn()
+
+            if staticDetected then
+                if not staticBlock or not staticBlock.Parent then
+                    staticBlock=nil; staticDetected=false
+                elseif os.clock()-staticDetectedAt >= STATIC_DURATION then
+                    if staticBlock.Parent then staticBlock:Destroy() end
+                    staticBlock=nil; staticDetected=false
+                    alertUI.hide(); return
                 end
             end
-            
-            local function isLocalPlayerInside(part)
-                if not LocalPlayer or not LocalPlayer.Character then return false end
-                if not part or not part.Parent then return false end
-                
-                -- 创建更精确的检测点（往回偏移 0.5 stud）
-                local partSize = part.Size
-                local detectionPart = Instance.new("Part")
-                detectionPart.Size = Vector3.new(0.1, 0.1, 0.1) -- 小检测点
-                detectionPart.CanCollide = false
-                detectionPart.Transparency = 1
-                
-                -- 计算检测点位置：在方块中心往回 0.5 stud
-                local backDir = -part.CFrame.LookVector
-                local detectionPos = part.CFrame.Position + backDir * 0.5
-                detectionPart.CFrame = CFrame.new(detectionPos)
-                detectionPart.Parent = workspace
-                
-                local isInside = false
-                local touchingParts = workspace:GetPartsInPart(detectionPart)
-                for _, p in ipairs(touchingParts) do
-                    if p:IsDescendantOf(LocalPlayer.Character) then
-                        isInside = true
-                        break
-                    end
-                end
-                
-                detectionPart:Destroy()
-                return isInside
+
+            local blocks = {}
+            if shortBlock  and shortBlock.Parent  then table.insert(blocks, shortBlock)  end
+            if longBlock   and longBlock.Parent   then table.insert(blocks, longBlock)   end
+            if staticBlock and staticBlock.Parent then table.insert(blocks, staticBlock) end
+
+            if #blocks == 0 then
+                heartbeat:Disconnect(); alertUI.destroy(); return
             end
-            -- Track static block state (Shockwave for Mass Infection, Swords for Entanglement)
-            local staticBlockDetected = false
-            local staticBlockDirection = nil
-            local staticBlock = nil
-            local staticBlockDetectedTime = 0
-            local staticBlockFreezeDuration = 5.5
-            
-            -- Monitor for static block spawn (Shockwave or Swords)
-            local staticBlockConnection
-            local function checkForStaticBlock()
-                local mapPath = workspace:FindFirstChild("Map")
-                if mapPath then
-                    local ingame = mapPath:FindFirstChild("Ingame")
-                    if ingame then
-                        -- Check for Mass Infection's Shockwave or Entanglement's Swords
-                        local staticObject = nil
-                        local objectName = ""
-                        
-                        if isMassInfection then
-                            -- Check for both "Shockwave" and "shockwave"
-                            staticObject = ingame:FindFirstChild("Shockwave") or ingame:FindFirstChild("shockwave")
-                            objectName = "SHOCKWAVE"
-                        else -- Entanglement
-                            staticObject = ingame:FindFirstChild("Swords")
-                            objectName = "SWORDS"
-                        end
-                        
-                        if staticObject and not staticBlockDetected then
-                            staticBlockDetected = true
-                            staticBlockDetectedTime = os.clock()
-                            print("🔍 " .. objectName .. " FOUND! Object type:", staticObject.ClassName)
-                            
-                            -- Find the part in the object (Model or BasePart)
-                            local objectPart = nil
-                            if staticObject:IsA("Model") then
-                                -- For Swords Model, specifically look for "Core" part
-                                if not isMassInfection then
-                                    objectPart = staticObject:FindFirstChild("Core")
-                                    if objectPart then
-                                        print("  ✓ Found Swords.Core part!")
-                                    else
-                                        print("  ⚠️ Swords.Core not found, trying fallback...")
-                                        objectPart = staticObject.PrimaryPart or staticObject:FindFirstChildWhichIsA("BasePart")
-                                    end
-                                else
-                                    objectPart = staticObject.PrimaryPart or staticObject:FindFirstChildWhichIsA("BasePart")
-                                end
-                                print("  " .. objectName .. " is a Model, using part:", objectPart and objectPart.Name or "nil")
-                            elseif staticObject:IsA("BasePart") then
-                                objectPart = staticObject
-                                print("  " .. objectName .. " is a BasePart")
-                            end
-                            
-                            if not objectPart then
-                                print("  ⚠️ Could not find a part in " .. objectName .. " model")
-                                staticBlockDetected = false -- Reset so it can try again
-                                return
-                            end
-                            
-                            if isMassInfection then
-                                -- Mass Infection: Destroy lookvector blocks and replace with static block
-                                print("🌊 SHOCKWAVE DETECTED! Destroying lookvector blocks and creating static block...")
-                                
-                                if shortBlock and shortBlock.Parent then
-                                    shortBlock:Destroy()
-                                    print("✓ Destroyed SHORT lookvector block")
-                                end
-                                if longBlock and longBlock.Parent then
-                                    longBlock:Destroy()
-                                    print("✓ Destroyed LONG lookvector block")
-                                end
-                                
-                                -- Get velocity direction for static block
-                                local velocity = objectPart.AssemblyLinearVelocity
-                                if velocity.Magnitude > 0.1 then
-                                    staticBlockDirection = Vector3.new(velocity.X, 0, velocity.Z).Unit
-                                    print("  Using " .. objectName .. " velocity direction:", staticBlockDirection)
-                                else
-                                    staticBlockDirection = Vector3.new(objectPart.CFrame.LookVector.X, 0, objectPart.CFrame.LookVector.Z).Unit
-                                    print("  Using " .. objectName .. " CFrame direction (fallback):", staticBlockDirection)
-                                end
-                                
-                                -- Create static tracking block
-                                if character then
-                                    local killerRoot = character:FindFirstChild("HumanoidRootPart")
-                                    if killerRoot then
-                                        staticBlock = Instance.new("Part")
-                                        staticBlock.Name = objectName .. "TrackingBlock"
-                                        staticBlock.Size = longSize -- Use the same size as longBlock
-                                        staticBlock.Anchored = true
-                                        staticBlock.CanCollide = false
-                                        staticBlock.Material = Enum.Material.ForceField
-                                        staticBlock.Color = Color3.fromRGB(0, 255, 255) -- Cyan color
-                                        staticBlock.Transparency = 0.5
-                                        
-                                        local rootPos = killerRoot.Position
-                                        local blockPos = rootPos + staticBlockDirection * (staticBlock.Size.Z / 2)
-                                        staticBlock.CFrame = CFrame.new(blockPos, blockPos + staticBlockDirection)
-                                        staticBlock.Parent = workspace
-                                        
-                                        print("✓ Created " .. objectName .. " static tracking block")
-                                        Debris:AddItem(staticBlock, 10)
-                                    end
-                                end
-                            else
-                                -- Entanglement (Swords): Create static block with EXACT CFrame matching Swords
-                                print("⚔️ SWORDS DETECTED! Creating static block matching Swords CFrame exactly...")
-                                
-                                -- Destroy red lookvector blocks when Swords appear
-                                if shortBlock and shortBlock.Parent then
-                                    shortBlock:Destroy()
-                                    print("✓ Destroyed SHORT lookvector block")
-                                end
-                                if longBlock and longBlock.Parent then
-                                    longBlock:Destroy()
-                                    print("✓ Destroyed LONG lookvector block")
-                                end
-                                
-                                staticBlock = Instance.new("Part")
-                                staticBlock.Name = objectName .. "TrackingBlock"
-                                staticBlock.Size = longSize -- Use the same size as longBlock
-                                staticBlock.Anchored = true
-                                staticBlock.CanCollide = false
-                                staticBlock.Material = Enum.Material.ForceField
-                                staticBlock.Color = Color3.fromRGB(0, 255, 255) -- Cyan color
-                                staticBlock.Transparency = 0.5
-                                
-                                -- Copy EXACT CFrame from Swords.Core (position + rotation + orientation)
-                                staticBlock.CFrame = objectPart.CFrame
-                                staticBlock.Parent = workspace
-                                
-                                print("✓ Created static block matching Swords CFrame exactly")
-                                print("  Position:", objectPart.Position)
-                                print("  LookVector:", objectPart.CFrame.LookVector)
-                                Debris:AddItem(staticBlock, 10)
-                            end
-                        end
-                    end
-                end
-            end
-            
-            -- Update loop: rotate blocks to face killer's look direction and manage warning GUI
-            local blockUpdateConnection
-            blockUpdateConnection = RunService.Heartbeat:Connect(function()
-                -- Check for static block spawn
-                checkForStaticBlock()
-                
-                -- Process static block if detected (for both Mass Infection and Entanglement)
-                if staticBlockDetected then
-                    if staticBlock and staticBlock.Parent then
-                        -- Check if player is inside static block
-                        local isInsideNow = isLocalPlayerInside(staticBlock)
-                        
-                        if isInsideNow then
-                            -- Player is inside static block
-                            createWarningGui()
-                            
-                            -- Keep playing sound while inside
-                            if not soundPlaying then
-                                sound:Play()
-                                soundPlaying = true
-                                lastPlayed = os.clock()
-                            else
-                                -- Restart sound every 1 second to keep alert active
-                                local now = os.clock()
-                                if now - lastPlayed >= 1 then
-                                    sound:Stop()
-                                    sound:Play()
-                                    lastPlayed = now
-                                end
-                            end
-                        else
-                            -- Player is outside static block
-                            destroyWarningGui()
-                            if sound and sound.Parent then
-                                sound:Stop()
-                                soundPlaying = false
-                            end
-                        end
-                        
-                        -- Check if static block duration has expired
-                        local elapsedTime = os.clock() - staticBlockDetectedTime
-                        if elapsedTime >= staticBlockFreezeDuration then
-                            print("⏰ Static block ended (5.5s), destroying block")
-                            if staticBlock and staticBlock.Parent then
-                                staticBlock:Destroy()
-                            end
-                            destroyWarningGui()
-                            if sound and sound.Parent then
-                                sound:Stop()
-                                soundPlaying = false
-                            end
-                            if blockUpdateConnection then
-                                blockUpdateConnection:Disconnect()
-                            end
-                            return
-                        end
-                    else
-                        -- Static block destroyed, cleanup
-                        destroyWarningGui()
-                        if sound and sound.Parent then
-                            sound:Stop()
-                            soundPlaying = false
-                        end
-                        if blockUpdateConnection then
-                            blockUpdateConnection:Disconnect()
-                        end
-                        return
-                    end
-                    -- If Mass Infection, don't process lookvector blocks when static block is active
-                    if isMassInfection then
-                        return
-                    end
-                end
-                
-                -- Normal lookvector block logic (always for Entanglement, or Mass Infection before static block)
-                if not longBlock or not longBlock.Parent or not running then 
-                    if blockUpdateConnection then
-                        blockUpdateConnection:Disconnect()
-                    end
-                    if staticBlockConnection then
-                        staticBlockConnection:Disconnect()
-                    end
-                    destroyWarningGui()
-                    if sound and sound.Parent then
-                        sound:Stop()
-                        soundPlaying = false
-                    end
-                    return 
-                end
-                
-                -- Move and rotate blocks based on killer's look direction
-                if character then
-                    local killerRoot = character:FindFirstChild("HumanoidRootPart")
-                    if killerRoot then
-                        local killerLook = killerRoot.CFrame.LookVector
-                        local directionToUse = Vector3.new(killerLook.X, 0, killerLook.Z).Unit
-                        
-                        -- Calculate new positions based on killer's current position
-                        local rootPos = killerRoot.Position
-                        local shortPos = rootPos + directionToUse * (shortBlock.Size.Z / 2)
-                        local longPos = rootPos + directionToUse * (longBlock.Size.Z / 2)
-                        
-                        -- Update CFrames to new positions and face the direction
-                        shortBlock.CFrame = CFrame.new(shortPos, shortPos + directionToUse)
-                        longBlock.CFrame = CFrame.new(longPos, longPos + directionToUse)
-                    end
-                end
-                
-                -- Check if player is inside lookvector blocks
-                local insideNow = isLocalPlayerInside(longBlock) or isLocalPlayerInside(shortBlock)
-                
-                -- For Entanglement, also check static block if it exists
-                if not isMassInfection and staticBlock and staticBlock.Parent then
-                    insideNow = insideNow or isLocalPlayerInside(staticBlock)
-                end
-                
-                if insideNow then
-                    -- Player is inside lookvector blocks
-                    createWarningGui()
-                    
-                    -- Keep playing sound while inside
-                    if not soundPlaying then
-                        sound:Play()
-                        soundPlaying = true
-                        lastPlayed = os.clock()
-                    else
-                        -- Restart sound every 1 second to keep alert active
-                        local now = os.clock()
-                        if now - lastPlayed >= 1 then
-                            sound:Stop()
-                            sound:Play()
-                            lastPlayed = now
-                        end
+
+            local now = os.clock()
+
+            -- ── update moving-away state for each block ──
+            -- uses CENTER-to-CENTER distance so it works even when player is inside block
+            -- snapshots distance at start of receding window to avoid noise resets
+            for _, b in ipairs(blocks) do
+                local s    = getBlockState(b)
+                local dist = (b.Position - hrp.Position).Magnitude
+
+                if not s.recedingStart then
+                    -- not yet tracking — check if it just started moving away
+                    if s.lastDist < math.huge and dist > s.lastDist + 0.05 then
+                        s.recedingStart    = now
+                        s.recedingSnapDist = s.lastDist  -- snapshot distance at start
                     end
                 else
-                    -- Player is outside lookvector blocks
-                    if soundPlaying then
-                        sound:Stop()
-                        soundPlaying = false
+                    -- currently tracking receding
+                    local elapsed = now - s.recedingStart
+                    if dist < s.recedingSnapDist and not s.isGreen then
+                        -- came back closer before 1s was up → reset timer (only if not green yet)
+                        s.recedingStart    = nil
+                        s.recedingSnapDist = nil
+                    elseif elapsed >= MOVING_AWAY_TIMEOUT and not s.isGreen then
+                        -- been moving away for 1s and never came back → green
+                        s.isGreen = true
+                        setBlockColor(b, Color3.fromRGB(0, 200, 80))
+                        print("✅ Block receding 1s → GREEN")
                     end
-                    destroyWarningGui()
                 end
-            end)
-        end
-    end
-end
 
--- Function to set up listeners for a specific character model
-local function setupCharacter(character)
-    if not running then return end
-    
-    -- ONLY monitor the target character
-    if character.Name ~= TARGET_KILLER_NAME then
-        debugPrint("Skipping non-target character:", character.Name)
-        return
-    end
-    
-    if monitoredCharacters[character] then 
-        debugPrint("Character already monitored:", character.Name)
-        return 
-    end
-    monitoredCharacters[character] = true
-    
-    print("✓ Setting up TARGET character:", character.Name)
-    debugPrint("  Full path:", character:GetFullName())
-    
-    local humanoid = character:FindFirstChildOfClass("Humanoid")
-    if not humanoid then 
-        debugPrint("  No Humanoid found in character")
-        return 
-    end
-    debugPrint("  Humanoid found:", humanoid)
-    
-    -- Create animation handler for this specific character
-    local onAnimationPlayed = createAnimationHandler(character)
-    
-    local animator = humanoid:FindFirstChildOfClass("Animator")
-    if not animator then
-        debugPrint("  No Animator found, waiting for it...")
-        -- If animator doesn't exist, wait for it
-        local animConnection
-        animConnection = humanoid.ChildAdded:Connect(function(child)
-            if child:IsA("Animator") then
-                debugPrint("  Animator added:", child)
-                table.insert(connections, child.AnimationPlayed:Connect(onAnimationPlayed))
-                animConnection:Disconnect()
-                -- Also check any currently playing tracks right away
-                local playingTracks = child:GetPlayingAnimationTracks()
-                debugPrint("  Currently playing tracks:", #playingTracks)
-                for _, track in ipairs(playingTracks) do
-                    onAnimationPlayed(track)
+                s.lastDist = dist
+            end
+
+            -- ── find nearest NON-green block ──
+            local minDist, closestB = math.huge, nil
+            for _, b in ipairs(blocks) do
+                local s = getBlockState(b)
+                if not s.isGreen then
+                    local d = distanceToSurface(b, hrp.Position)
+                    if d < minDist then minDist=d; closestB=b end
                 end
+            end
+
+            if closestB and minDist <= ALERT_DISTANCE then
+                local dir = getEscapeDirection(hrp, closestB)
+                alertUI.updateDir(dir)
+                alertUI.show(dir)
+            else
+                alertUI.hide()
             end
         end)
-        table.insert(connections, animConnection)
-    else
-        debugPrint("  Animator found:", animator)
-        table.insert(connections, animator.AnimationPlayed:Connect(onAnimationPlayed))
-        -- Fire for tracks already playing
-        local playingTracks = animator:GetPlayingAnimationTracks()
-        debugPrint("  Currently playing tracks:", #playingTracks)
-        for i, track in ipairs(playingTracks) do
-            debugPrint("    Track", i, ":", track.Animation.AnimationId)
-            onAnimationPlayed(track)
-        end
     end
-    
-    print("✓ Now monitoring animations for:", character.Name)
 end
 
--- Main function to find the killer and connect events
+-- ─── Setup character ──────────────────────────────────────────────────────────
+local function setupCharacter(character)
+    if not running then return end
+    if character.Name ~= TARGET_KILLER_NAME then return end
+    if monitoredCharacters[character] then return end
+    monitoredCharacters[character] = true
+    print("✓ Monitoring killer:", character.Name)
+    local humanoid = character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then return end
+    local handler = createAnimationHandler(character)
+    local function hookAnimator(animator)
+        table.insert(connections, animator.AnimationPlayed:Connect(handler))
+        for _, t in ipairs(animator:GetPlayingAnimationTracks()) do handler(t) end
+    end
+    local animator = humanoid:FindFirstChildOfClass("Animator")
+    if animator then hookAnimator(animator)
+    else
+        local c
+        c = humanoid.ChildAdded:Connect(function(child)
+            if child:IsA("Animator") then hookAnimator(child); c:Disconnect() end
+        end)
+        table.insert(connections, c)
+    end
+end
+
+-- ─── Main ─────────────────────────────────────────────────────────────────────
 local function main()
-    print("========================================")
-    print("Animation Detection Script Starting")
-    print("Target Killer:", TARGET_KILLER_NAME)
-    print("Press P to toggle script on/off")
-    print("Detecting Mass Infection Animations:", getKeysString(MASS_INFECTION_IDS))
-    print("Detecting Entanglement Animations:", getKeysString(ENTANGLEMENT_IDS))
-    print("========================================")
-    
-    -- Preferred path: workspace.Players.Killers
-    local killersFolder = workspace:FindFirstChild("Players")
-    if killersFolder then
-        killersFolder = killersFolder:FindFirstChild("Killers")
-    end
-
-    -- Check preferred path first
-    if killersFolder then
-        print("✓ Found killers folder at: workspace.Players.Killers")
-        local childCount = #killersFolder:GetChildren()
-        print("  Found", childCount, "children in Killers folder")
-        
-        -- Look specifically for 1x1x1x1
-        local target = killersFolder:FindFirstChild(TARGET_KILLER_NAME)
-        if target then
-            print("✓ FOUND TARGET:", TARGET_KILLER_NAME)
-            debugPrint("  Full path:", target:GetFullName())
-            local humanoid = target:FindFirstChild("Humanoid")
-            debugPrint("  Has Humanoid:", humanoid ~= nil)
-            if humanoid then
-                local animator = humanoid:FindFirstChild("Animator") or humanoid:FindFirstChildOfClass("Animator")
-                debugPrint("  Has Animator:", animator ~= nil)
-                if animator then
-                    local tracks = animator:GetPlayingAnimationTracks()
-                    print("  Currently playing", #tracks, "animation(s)")
-                    for i, track in ipairs(tracks) do
-                        print("    Animation", i, ":", track.Animation.AnimationId)
-                    end
-                end
-            end
-        else
-            warn("✗ Could not find", TARGET_KILLER_NAME, "in Killers folder!")
-            print("  Available children:")
-            for _, child in ipairs(killersFolder:GetChildren()) do
-                print("    -", child.Name, "(" .. child.ClassName .. ")")
-            end
-        end
-        
-        -- ONLY monitor the target model
-        local targetModel = killersFolder:FindFirstChild(TARGET_KILLER_NAME)
-        if targetModel and targetModel:IsA("Model") and targetModel:FindFirstChildOfClass("Humanoid") then
-            setupCharacter(targetModel)
-        end
-        
-        -- Watch for the target model being added (if not already present)
-        table.insert(connections, killersFolder.ChildAdded:Connect(function(child)
-            if child.Name == TARGET_KILLER_NAME and child:IsA("Model") and child:FindFirstChildOfClass("Humanoid") then
-                print("✓ Target model", TARGET_KILLER_NAME, "was added to Killers folder")
-                setupCharacter(child)
-            end
-        end))
-    else
-        warn("✗ Could not find folder at path: workspace.Players.Killers")
-        print("✗ Script will not work without the Killers folder!")
-        return
-    end
-    
-    -- Listen for toggle key
-    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gameProcessed)
-        if not gameProcessed and input.KeyCode == SHUTDOWN_KEY then
-            if running then
-                shutdown()
-                print("Script toggled OFF")
-            else
-                print("Script is already off. Re-execute to restart.")
-            end
-        end
+    print("======================================")
+    print("Forsaken Detector — Starting")
+    print("Target:", TARGET_KILLER_NAME, "| P = shutdown")
+    print("Alert distance:", ALERT_DISTANCE, "studs | Moving-away timeout:", MOVING_AWAY_TIMEOUT.."s")
+    print("======================================")
+    local killersFolder
+    local wp = workspace:FindFirstChild("Players")
+    if wp then killersFolder = wp:FindFirstChild("Killers") end
+    if not killersFolder then warn("✗ workspace.Players.Killers not found!"); return end
+    local existing = killersFolder:FindFirstChild(TARGET_KILLER_NAME)
+    if existing and existing:IsA("Model") then setupCharacter(existing) end
+    table.insert(connections, killersFolder.ChildAdded:Connect(function(child)
+        if child.Name == TARGET_KILLER_NAME and child:IsA("Model") then setupCharacter(child) end
     end))
-    
-    print("Animation detection script is running. Press P to toggle off.")
+    table.insert(connections, UserInputService.InputBegan:Connect(function(input, gp)
+        if not gp and input.KeyCode == SHUTDOWN_KEY then shutdown(); print("[Detector] OFF") end
+    end))
+    print("✓ Running. Press P to stop.")
 end
 
--- Run the script
 main()
-
--- Mark script as fully loaded
 _G.masssword = true
 
--- Monitor _G.masssword status every second
 task.spawn(function()
     while running do
         task.wait(1)
         if _G.masssword == false then
-            if not paused then
-                paused = true
-                print("⏸️ Script PAUSED: _G.masssword is false")
-            end
+            if not paused then paused=true;  print("⏸️ PAUSED")  end
         else
-            if paused then
-                paused = false
-                print("▶️ Script RESUMED: _G.masssword is true")
-            end
+            if paused     then paused=false; print("▶️ RESUMED") end
         end
     end
 end)
