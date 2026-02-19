@@ -168,17 +168,21 @@ local function createAnimationHandler(character)
             local shortBlock = Instance.new("Part")
             shortBlock.Name = "KillerShortBlock"
             shortBlock.Size = shortSize
-            shortBlock.Anchored = true
+            shortBlock.Anchored = false
             shortBlock.CanCollide = false
             shortBlock.Material = Enum.Material.ForceField
             shortBlock.Color = Color3.fromRGB(255, 0, 0)
             shortBlock.Transparency = 0.5
-            local shortPos = root.Position + flatLook * (shortBlock.Size.Z / 2)
-            shortBlock.CFrame = CFrame.new(shortPos, shortPos + flatLook)
+            shortBlock.CFrame = root.CFrame * CFrame.new(0, 0, -shortSize.Z / 2)
             shortBlock.Parent = workspace
+
+            local shortWeld = Instance.new("WeldConstraint")
+            shortWeld.Part0 = shortBlock
+            shortWeld.Part1 = root
+            shortWeld.Parent = shortBlock
             
             print("✓ Created SHORT block (" .. shortSize.X .. "x" .. shortSize.Y .. "x" .. shortSize.Z .. ") - Duration: " .. duration .. "s")
-            debugPrint("  Short block position:", shortPos)
+            debugPrint("  Short block position:", shortBlock.Position)
             debugPrint("  Short block CFrame:", shortBlock.CFrame)
             debugPrint("  Short block parent:", shortBlock.Parent)
             
@@ -188,17 +192,21 @@ local function createAnimationHandler(character)
             local longBlock = Instance.new("Part")
             longBlock.Name = "KillerLongBlock"
             longBlock.Size = longSize
-            longBlock.Anchored = true
+            longBlock.Anchored = false
             longBlock.CanCollide = false
             longBlock.Material = Enum.Material.ForceField
             longBlock.Color = Color3.fromRGB(255, 0, 0)
             longBlock.Transparency = 0.5
-            local longPos = root.Position + flatLook * (longBlock.Size.Z / 2)
-            longBlock.CFrame = CFrame.new(longPos, longPos + flatLook)
+            longBlock.CFrame = root.CFrame * CFrame.new(0, 0, -longSize.Z / 2)
             longBlock.Parent = workspace
+
+            local longWeld = Instance.new("WeldConstraint")
+            longWeld.Part0 = longBlock
+            longWeld.Part1 = root
+            longWeld.Parent = longBlock
             
             print("✓ Created LONG block (" .. longSize.X .. "x" .. longSize.Y .. "x" .. longSize.Z .. ") - Duration: " .. duration .. "s")
-            debugPrint("  Long block position:", longPos)
+            debugPrint("  Long block position:", longBlock.Position)
             debugPrint("  Long block CFrame:", longBlock.CFrame)
             debugPrint("  Long block parent:", longBlock.Parent)
             
